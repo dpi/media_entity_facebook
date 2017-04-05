@@ -5,6 +5,7 @@ namespace Drupal\media_entity_facebook\Plugin\MediaEntity\Type;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\media_entity\MediaInterface;
 use Drupal\media_entity\MediaTypeBase;
+use GuzzleHttp\Exception\TransferException;
 
 /**
  * Provides media type plugin for Facebook.
@@ -70,18 +71,26 @@ class Facebook extends MediaTypeBase {
   }
 
   /**
-   * Returns the oembed data.
+   * Returns the oembed data for a Facebook post.
    *
    * @param string $url
-   *   The URl to the facebook post.
+   *   The URL to the facebook post.
    *
-   * @return array
+   * @return bool|array
+   *   FALSE if there was a problem retrieving the oEmbed data, otherwise
+   *   an array of the data is returned.
    */
   protected function oEmbed($url) {
     $url = 'https://www.facebook.com/plugins/post/oembed.json/?url=' . $url;
 
-    $response = $client = \Drupal::httpClient()->get($url);
-    return json_decode((string) $response->getBody(), TRUE);
+    try {
+      $response = $client = \Drupal::httpClient()->get($url);
+      return json_decode((string) $response->getBody(), TRUE);
+    }
+    catch (TransferException $e) {
+      \Drupal::logger('media_entity_facebook')->error($this->t('Error retrieving oEmbed data for a Facebook media entity: @error', ['@error' => $e->getMessage()]));
+      return FALSE;
+    }
   }
 
   /**
@@ -108,7 +117,15 @@ class Facebook extends MediaTypeBase {
    * {@inheritdoc}
    */
   public function getField(MediaInterface $media, $name) {
+    $post_url = $this->getFacebookUrl($media);
+    if ($post_url === FALSE) {
+      return FALSE;
+    }
+
     $data = $this->oEmbed($this->getFacebookUrl($media));
+    if ($data === FALSE) {
+      return FALSE;
+    }
 
     switch ($name) {
       case 'author_name':
