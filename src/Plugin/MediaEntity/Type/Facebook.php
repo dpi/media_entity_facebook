@@ -18,7 +18,6 @@ use GuzzleHttp\Exception\TransferException;
  *
  * @todo On the long run we could switch to the facebook API which provides WAY
  *   more fields.
- * @todo Support embed codes
  */
 class Facebook extends MediaTypeBase {
 
@@ -84,7 +83,8 @@ class Facebook extends MediaTypeBase {
     $data = &drupal_static(__FUNCTION__);
 
     if (!isset($data)) {
-      $url = 'https://www.facebook.com/plugins/post/oembed.json/?url=' . $url;
+      $endpoint = $this->getApiEndpointUrl($url);
+      $url = $endpoint . '?url=' . $url;
 
       try {
         $response = \Drupal::httpClient()->get($url);
@@ -107,16 +107,87 @@ class Facebook extends MediaTypeBase {
    *   Media object.
    *
    * @return string|false
-   *   The facebook url or FALSE if there is no field.
+   *   The facebook url or FALSE if there is no field or it contains invalid
+   *   data.
    */
   protected function getFacebookUrl(MediaInterface $media) {
     if (isset($this->configuration['source_field'])) {
       $source_field = $this->configuration['source_field'];
       if ($media->hasField($source_field)) {
         $property_name = $media->{$source_field}->first()->mainPropertyName();
-        return $media->{$source_field}->{$property_name};
+        $embed = $media->{$source_field}->{$property_name};
+
+        return static::parseFacebookEmbedField($embed);
       }
     }
+
+    return FALSE;
+  }
+
+  /**
+   * Return the appropriate Facebook oEmbed API endpoint for the content URL.
+   *
+   * @param string $content_url
+   *   The content URL contains the URL to the resource.
+   *
+   * @return string
+   *   The oEmbed endpoint URL.
+   */
+  protected function getApiEndpointUrl($content_url) {
+    if (preg_match('/\/videos\//', $content_url) || preg_match('/\/video.php\//', $content_url)) {
+      return 'https://www.facebook.com/plugins/video/oembed.json/';
+    }
+    else {
+      return 'https://www.facebook.com/plugins/post/oembed.json/';
+    }
+  }
+
+  /**
+   * Extract a Facebook content URL from a string.
+   *
+   * Typically users will enter an iframe embed code that Facebook provides, so
+   * which needs to be parsed to extract the actual post URL.
+   *
+   * Users may also enter the actual content URL - in which case we just return
+   * the value if it matches our expected format.
+   *
+   * @param string $data
+   *   The string that contains the Facebook post URL.
+   *
+   * @return string|bool
+   *   The post URL, or FALSE if one cannot be found.
+   */
+  public static function parseFacebookEmbedField($data) {
+    $data = trim($data);
+
+    // Ideally we would verify that the content URL matches an exact pattern,
+    // but Facebook has a ton of different ways posts/notes/videos/etc URLs can
+    // be formatted, so it's not practical to try and validate them. Instead,
+    // just validate that the content URL is from the facebook domain.
+    $content_url_regex = '/^https:\/\/(www\.)?facebook\.com\//i';
+
+    if (preg_match($content_url_regex, $data)) {
+      return $data;
+    }
+    else {
+      // Check if the user entered an iframe embed instead, and if so,
+      // extract the post URL from the iframe src.
+      $doc = new \DOMDocument();
+      if (@$doc->loadHTML($data)) {
+        $iframes = $doc->getElementsByTagName('iframe');
+        if ($iframes->length > 0 && $iframes->item(0)->hasAttribute('src')) {
+          $iframe_src = $iframes->item(0)->getAttribute('src');
+          $uri_parts = parse_url($iframe_src);
+          if ($uri_parts !== FALSE && isset($uri_parts['query'])) {
+            parse_str($uri_parts['query'], $query_params);
+            if (isset($query_params['href']) && preg_match($content_url_regex, $query_params['href'])) {
+              return $query_params['href'];
+            }
+          }
+        }
+      }
+    }
+
     return FALSE;
   }
 
@@ -124,12 +195,12 @@ class Facebook extends MediaTypeBase {
    * {@inheritdoc}
    */
   public function getField(MediaInterface $media, $name) {
-    $post_url = $this->getFacebookUrl($media);
-    if ($post_url === FALSE) {
+    $content_url = $this->getFacebookUrl($media);
+    if ($content_url === FALSE) {
       return FALSE;
     }
 
-    $data = $this->oEmbed($this->getFacebookUrl($media));
+    $data = $this->oEmbed($content_url);
     if ($data === FALSE) {
       return FALSE;
     }
@@ -137,12 +208,16 @@ class Facebook extends MediaTypeBase {
     switch ($name) {
       case 'author_name':
         return $data['author_name'];
+
       case 'width':
         return $data['width'];
+
       case 'height':
         return $data['height'];
+
       case 'url':
         return $data['url'];
+
       case 'html':
         return $data['html'];
     }
@@ -160,7 +235,25 @@ class Facebook extends MediaTypeBase {
    * {@inheritdoc}
    */
   public function getDefaultThumbnail() {
-    return drupal_get_path('module', 'media_entity_facebook') . '/images/FB-f-Logo__blue_100.png';
+    return $this->config->get('icon_base') . '/facebook.png';
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function attachConstraints(MediaInterface $media) {
+    parent::attachConstraints($media);
+
+    if (isset($this->configuration['source_field'])) {
+      $source_field_name = $this->configuration['source_field'];
+      if ($media->hasField($source_field_name)) {
+        foreach ($media->get($source_field_name) as &$embed_code) {
+          /** @var \Drupal\Core\TypedData\DataDefinitionInterface $typed_data */
+          $typed_data = $embed_code->getDataDefinition();
+          $typed_data->addConstraint('FacebookEmbedCode');
+        }
+      }
+    }
   }
 
 }
