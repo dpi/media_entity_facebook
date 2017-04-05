@@ -87,7 +87,7 @@ class Facebook extends MediaTypeBase {
       $url = $endpoint . '?url=' . $url;
 
       try {
-        $response = \Drupal::httpClient()->get($url);
+        $response = \Drupal::httpClient()->get($url, ['timeout' => 5]);
         return json_decode((string) $response->getBody(), TRUE);
       }
       catch (TransferException $e) {
