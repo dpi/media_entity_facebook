@@ -80,24 +80,26 @@ class Facebook extends MediaTypeBase {
    *   an array of the data is returned.
    */
   protected function oEmbed($url) {
-    $data = &drupal_static(__FUNCTION__);
+    static $memory_cache;
 
-    if (!isset($data)) {
-      $endpoint = $this->getApiEndpointUrl($url);
-      $url = $endpoint . '?url=' . $url;
+    if (!isset($memory_cache)) {
+      $memory_cache = [];
+    }
+
+    if (!isset($memory_cache[$url])) {
+      $endpoint = $this->getApiEndpointUrl($url) . '?url=' . $url;
 
       try {
-        $response = \Drupal::httpClient()->get($url, ['timeout' => 5]);
-        return json_decode((string) $response->getBody(), TRUE);
+        $response = \Drupal::httpClient()->get($endpoint, ['timeout' => 5]);
+        $decoded = json_decode((string) $response->getBody(), TRUE);
+        $memory_cache[$url] = $decoded;
       }
       catch (TransferException $e) {
         \Drupal::logger('media_entity_facebook')->error($this->t('Error retrieving oEmbed data for a Facebook media entity: @error', ['@error' => $e->getMessage()]));
         return FALSE;
       }
     }
-    else {
-      return $data;
-    }
+    return $memory_cache[$url];
   }
 
   /**
