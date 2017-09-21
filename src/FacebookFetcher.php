@@ -26,6 +26,13 @@ class FacebookFetcher {
   protected $httpClient;
 
   /**
+   * Tracks when an error has occurred when interacting with the API.
+   *
+   * @var bool
+   */
+  protected $apiErrorEncountered = FALSE;
+
+  /**
    * FacebookFetcher constructor.
    *
    * @param \Drupal\Core\Logger\LoggerChannelFactoryInterface $logger_channel_factory
@@ -45,13 +52,24 @@ class FacebookFetcher {
    *   The URL to pass to Facebook's oembed API.
    */
   public function getOembedData($resource_url) {
+    // Keep an in-memory cache of the response data for each URL, since this
+    // data may be requested multiple times on the same request.
     static $memory_cache;
-
     if (!isset($memory_cache)) {
       $memory_cache = [];
     }
 
     if (!isset($memory_cache[$resource_url])) {
+      // If there was an error interacting with the Facebook API, like a network
+      // timeout due to Facebook being down, we don't want to clog up the Drupal
+      // site's resources by making lots of API requests that may all timeout.
+      // To do this, we mark when a request exception occurred and back out of
+      // subsequent requests if so.
+      if ($this->apiErrorEncountered) {
+        $this->loggerChannel->error('Aborting Facebook API request due to previously encountered error.');
+        return FALSE;
+      }
+
       $endpoint = $this->getApiEndpointUrl($resource_url) . '?url=' . $resource_url;
 
       try {
@@ -60,7 +78,8 @@ class FacebookFetcher {
         $memory_cache[$resource_url] = $decoded;
       }
       catch (TransferException $e) {
-        \Drupal::logger('media_entity_facebook')->error($this->t('Error retrieving oEmbed data for a Facebook media entity: @error', ['@error' => $e->getMessage()]));
+        \Drupal::logger('media_entity_facebook')->error('Error retrieving oEmbed data for a Facebook media entity: @error', ['@error' => $e->getMessage()]);
+        $this->apiErrorEncountered = TRUE;
         return FALSE;
       }
     }
