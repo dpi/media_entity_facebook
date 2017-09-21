@@ -5,7 +5,11 @@ namespace Drupal\media_entity_facebook\Plugin\MediaEntity\Type;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\media_entity\MediaInterface;
 use Drupal\media_entity\MediaTypeBase;
-use GuzzleHttp\Exception\TransferException;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Entity\EntityFieldManagerInterface;
+use Drupal\Core\Config\Config;
+use Drupal\media_entity_facebook\FacebookFetcher;
+use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
  * Provides media type plugin for Facebook.
@@ -20,6 +24,51 @@ use GuzzleHttp\Exception\TransferException;
  *   more fields.
  */
 class Facebook extends MediaTypeBase {
+
+  /**
+   * Facebook Fetcher.
+   *
+   * @var \Drupal\media_entity_facebook\FacebookFetcher
+   */
+  protected $facebookFetcher;
+
+  /**
+   * Facebook constructor.
+   *
+   * @param array $configuration
+   *   A configuration array containing information about the plugin instance.
+   * @param string $plugin_id
+   *   The plugin_id for the plugin instance.
+   * @param mixed $plugin_definition
+   *   The plugin implementation definition.
+   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
+   *   Entity type manager service.
+   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
+   *   Entity field manager service.
+   * @param \Drupal\Core\Config\Config $config
+   *   Media entity config object.
+   * @param \Drupal\media_entity_facebook\FacebookFetcher $facebook_fetcher
+   *   The Facebook Fetcher.
+   */
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, Config $config, FacebookFetcher $facebook_fetcher) {
+    parent::__construct($configuration, $plugin_id, $plugin_definition, $entity_type_manager, $entity_field_manager, $config);
+    $this->facebookFetcher = $facebook_fetcher;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+    return new static(
+      $configuration,
+      $plugin_id,
+      $plugin_definition,
+      $container->get('entity_type.manager'),
+      $container->get('entity_field.manager'),
+      $container->get('config.factory')->get('media_entity.settings'),
+      $container->get('media_entity_facebook.facebook_fetcher')
+    );
+  }
 
   /**
    * {@inheritdoc}
@@ -70,39 +119,6 @@ class Facebook extends MediaTypeBase {
   }
 
   /**
-   * Returns the oembed data for a Facebook post.
-   *
-   * @param string $url
-   *   The URL to the facebook post.
-   *
-   * @return bool|array
-   *   FALSE if there was a problem retrieving the oEmbed data, otherwise
-   *   an array of the data is returned.
-   */
-  protected function oEmbed($url) {
-    static $memory_cache;
-
-    if (!isset($memory_cache)) {
-      $memory_cache = [];
-    }
-
-    if (!isset($memory_cache[$url])) {
-      $endpoint = $this->getApiEndpointUrl($url) . '?url=' . $url;
-
-      try {
-        $response = \Drupal::httpClient()->get($endpoint, ['timeout' => 5]);
-        $decoded = json_decode((string) $response->getBody(), TRUE);
-        $memory_cache[$url] = $decoded;
-      }
-      catch (TransferException $e) {
-        \Drupal::logger('media_entity_facebook')->error($this->t('Error retrieving oEmbed data for a Facebook media entity: @error', ['@error' => $e->getMessage()]));
-        return FALSE;
-      }
-    }
-    return $memory_cache[$url];
-  }
-
-  /**
    * Runs preg_match on embed code/URL.
    *
    * @param MediaInterface $media
@@ -124,24 +140,6 @@ class Facebook extends MediaTypeBase {
     }
 
     return FALSE;
-  }
-
-  /**
-   * Return the appropriate Facebook oEmbed API endpoint for the content URL.
-   *
-   * @param string $content_url
-   *   The content URL contains the URL to the resource.
-   *
-   * @return string
-   *   The oEmbed endpoint URL.
-   */
-  protected function getApiEndpointUrl($content_url) {
-    if (preg_match('/\/videos\//', $content_url) || preg_match('/\/video.php\//', $content_url)) {
-      return 'https://www.facebook.com/plugins/video/oembed.json/';
-    }
-    else {
-      return 'https://www.facebook.com/plugins/post/oembed.json/';
-    }
   }
 
   /**
@@ -202,7 +200,7 @@ class Facebook extends MediaTypeBase {
       return FALSE;
     }
 
-    $data = $this->oEmbed($content_url);
+    $data = $this->facebookFetcher->getOembedData($content_url);
     if ($data === FALSE) {
       return FALSE;
     }
