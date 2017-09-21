@@ -6,7 +6,7 @@ use Drupal\Core\Field\FieldDefinitionInterface;
 use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Field\FormatterBase;
 use Drupal\media_entity_facebook\FacebookMarkup;
-use Drupal\media_entity_facebook\Plugin\MediaEntity\Type\Facebook;
+use Drupal\media_entity_facebook\Plugin\media\Source\Facebook;
 
 /**
  * Plugin implementation of the 'facebook_embed' formatter.
@@ -25,14 +25,14 @@ class FacebookEmbedFormatter extends FormatterBase {
    * {@inheritdoc}
    */
   public function viewElements(FieldItemListInterface $items, $langcode) {
-    /** @var \Drupal\media_entity\MediaInterface $media_entity */
-    $media_entity = $items->getEntity();
+    /** @var \Drupal\media\MediaInterface $media */
+    $media = $items->getEntity();
 
     $element = [];
-    if (($type = $media_entity->getType()) && $type instanceof Facebook) {
+    if (($source = $media->getSource()) && $source instanceof Facebook) {
       foreach ($items as $delta => $item) {
         $element[$delta] = [
-          '#markup' => FacebookMarkup::create($type->getField($media_entity, 'html')),
+          '#markup' => FacebookMarkup::create($source->getMetadata($media, 'html')),
         ];
       }
     }

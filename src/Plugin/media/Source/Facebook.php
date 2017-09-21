@@ -1,29 +1,30 @@
 <?php
 
-namespace Drupal\media_entity_facebook\Plugin\MediaEntity\Type;
+namespace Drupal\media_entity_facebook\Plugin\media\Source;
 
-use Drupal\Core\Form\FormStateInterface;
-use Drupal\media_entity\MediaInterface;
-use Drupal\media_entity\MediaTypeBase;
+use Drupal\media\MediaInterface;
+use Drupal\media\MediaSourceBase;
+use Drupal\media\MediaSourceFieldConstraintsInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
-use Drupal\Core\Config\Config;
+use Drupal\Core\Field\FieldTypePluginManagerInterface;
+use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\media\MediaTypeInterface;
 use Drupal\media_entity_facebook\FacebookFetcher;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
- * Provides media type plugin for Facebook.
+ * Facebook entity media source.
  *
- * @MediaType(
+ * @MediaSource(
  *   id = "facebook",
  *   label = @Translation("Facebook"),
- *   description = @Translation("Provides business logic and metadata for Facebook.")
+ *   description = @Translation("Provides business logic and metadata for Facebook."),
+ *   allowed_field_types = {"string_long"},
+ *   default_thumbnail_filename = "facebook.png"
  * )
- *
- * @todo On the long run we could switch to the facebook API which provides WAY
- *   more fields.
  */
-class Facebook extends MediaTypeBase {
+class Facebook extends MediaSourceBase implements MediaSourceFieldConstraintsInterface {
 
   /**
    * Facebook Fetcher.
@@ -33,7 +34,7 @@ class Facebook extends MediaTypeBase {
   protected $facebookFetcher;
 
   /**
-   * Facebook constructor.
+   * Constructs Facebook media source.
    *
    * @param array $configuration
    *   A configuration array containing information about the plugin instance.
@@ -45,13 +46,15 @@ class Facebook extends MediaTypeBase {
    *   Entity type manager service.
    * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
    *   Entity field manager service.
-   * @param \Drupal\Core\Config\Config $config
-   *   Media entity config object.
+   * @param \Drupal\Core\Field\FieldTypePluginManagerInterface $field_type_manager
+   *   The field type plugin manager service.
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   *   The config factory service.
    * @param \Drupal\media_entity_facebook\FacebookFetcher $facebook_fetcher
-   *   The Facebook Fetcher.
+   *   The facebook fetcher.
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, Config $config, FacebookFetcher $facebook_fetcher) {
-    parent::__construct($configuration, $plugin_id, $plugin_definition, $entity_type_manager, $entity_field_manager, $config);
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, FieldTypePluginManagerInterface $field_type_manager, ConfigFactoryInterface $config_factory, FacebookFetcher $facebook_fetcher) {
+    parent::__construct($configuration, $plugin_id, $plugin_definition, $entity_type_manager, $entity_field_manager, $field_type_manager, $config_factory);
     $this->facebookFetcher = $facebook_fetcher;
   }
 
@@ -65,7 +68,8 @@ class Facebook extends MediaTypeBase {
       $plugin_definition,
       $container->get('entity_type.manager'),
       $container->get('entity_field.manager'),
-      $container->get('config.factory')->get('media_entity.settings'),
+      $container->get('plugin.manager.field.field_type'),
+      $container->get('config.factory'),
       $container->get('media_entity_facebook.facebook_fetcher')
     );
   }
@@ -73,55 +77,57 @@ class Facebook extends MediaTypeBase {
   /**
    * {@inheritdoc}
    */
-  public function defaultConfiguration() {
-    return [
-      'source_field' => '',
+  public function getMetadataAttributes() {
+    $attributes = [
+      'author_name' => $this->t('Author Name'),
+      'width' => $this->t('Width'),
+      'height' => $this->t('Height'),
+      'url' => $this->t('URL'),
+      'html' => $this->t('HTML'),
     ];
+
+    return $attributes;
   }
 
   /**
    * {@inheritdoc}
    */
-  public function buildConfigurationForm(array $form, FormStateInterface $form_state) {
-    $form = [];
-
-    $options = [];
-    $bundle = $form_state->getFormObject()->getEntity();
-    $allowed_field_types = ['string', 'string_long', 'link'];
-    foreach ($this->entityFieldManager->getFieldDefinitions('media', $bundle->id()) as $field_name => $field) {
-      if (in_array($field->getType(), $allowed_field_types) && !$field->getFieldStorageDefinition()->isBaseField()) {
-        $options[$field_name] = $field->getLabel();
-      }
+  public function getMetadata(MediaInterface $media, $attribute_name) {
+    $content_url = $this->getFacebookUrl($media);
+    if ($content_url === FALSE) {
+      return FALSE;
     }
 
-    $form['source_field'] = [
-      '#type' => 'select',
-      '#title' => $this->t('Field with source information'),
-      '#description' => $this->t('Field on media entity that stores facebook embed code or URL. You can create a bundle without selecting a value for this dropdown initially. This dropdown can be populated after adding fields to the bundle.'),
-      '#default_value' => empty($this->configuration['source_field']) ? NULL : $this->configuration['source_field'],
-      '#options' => $options,
-    ];
+    $data = $this->facebookFetcher->getOembedData($content_url);
+    if ($data === FALSE) {
+      return FALSE;
+    }
 
-    return $form;
-  }
+    switch ($attribute_name) {
+      case 'author_name':
+        return $data['author_name'];
 
-  /**
-   * {@inheritdoc}
-   */
-  public function providedFields() {
-    return [
-      'author_name',
-      'width',
-      'height',
-      'url',
-      'html',
-    ];
+      case 'width':
+        return $data['width'];
+
+      case 'height':
+        return $data['height'];
+
+      case 'url':
+        return $data['url'];
+
+      case 'html':
+        return $data['html'];
+
+      default:
+        return parent::getMetadata($media, $attribute_name);
+    }
   }
 
   /**
    * Runs preg_match on embed code/URL.
    *
-   * @param MediaInterface $media
+   * @param \Drupal\media\MediaInterface $media
    *   Media object.
    *
    * @return string|false
@@ -194,66 +200,8 @@ class Facebook extends MediaTypeBase {
   /**
    * {@inheritdoc}
    */
-  public function getField(MediaInterface $media, $name) {
-    $content_url = $this->getFacebookUrl($media);
-    if ($content_url === FALSE) {
-      return FALSE;
-    }
-
-    $data = $this->facebookFetcher->getOembedData($content_url);
-    if ($data === FALSE) {
-      return FALSE;
-    }
-
-    switch ($name) {
-      case 'author_name':
-        return $data['author_name'];
-
-      case 'width':
-        return $data['width'];
-
-      case 'height':
-        return $data['height'];
-
-      case 'url':
-        return $data['url'];
-
-      case 'html':
-        return $data['html'];
-    }
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  public function thumbnail(MediaInterface $media) {
-    // @todo Add support for thumbnails on the longrun.
-    return $this->getDefaultThumbnail();
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  public function getDefaultThumbnail() {
-    return $this->config->get('icon_base') . '/facebook.png';
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  public function attachConstraints(MediaInterface $media) {
-    parent::attachConstraints($media);
-
-    if (isset($this->configuration['source_field'])) {
-      $source_field_name = $this->configuration['source_field'];
-      if ($media->hasField($source_field_name)) {
-        foreach ($media->get($source_field_name) as &$embed_code) {
-          /** @var \Drupal\Core\TypedData\DataDefinitionInterface $typed_data */
-          $typed_data = $embed_code->getDataDefinition();
-          $typed_data->addConstraint('FacebookEmbedCode');
-        }
-      }
-    }
+  public function getSourceFieldConstraints() {
+    return ['FacebookEmbedCode' => []];
   }
 
 }
